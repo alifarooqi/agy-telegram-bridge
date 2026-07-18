@@ -107,7 +107,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         # Forward prompt to Antigravity
         logger.info(f"Sending prompt from chat_id {chat_id} to Antigravity")
-        response = await conversation.chat(text)
+        try:
+            response = await conversation.chat(text)
+        except Exception as chat_err:
+            err_msg = str(chat_err)
+            # If it's a websocket or connection closure exception, attempt to reconnect
+            if "ConnectionClosed" in err_msg or "connection" in err_msg.lower() or "websocket" in err_msg.lower():
+                logger.warning(f"Connection error during chat: {chat_err}. Re-establishing session...")
+                await session_manager.close_session(chat_id, clear_persistence=False)
+                conversation = await session_manager.get_conversation(chat_id)
+                logger.info(f"Retrying prompt from chat_id {chat_id} with new session")
+                response = await conversation.chat(text)
+            else:
+                raise
         
         # Drain the stream and retrieve text
         response_text = await response.text()

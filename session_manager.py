@@ -49,6 +49,22 @@ class SessionManager:
         """Retrieves or creates a stateful conversation for the given chat_id,
         resuming from a saved conversation ID if available.
         """
+        # Check if we have an active agent and if it's still connected
+        if chat_id in self.active_agents:
+            agent = self.active_agents[chat_id]
+            is_active = False
+            try:
+                if agent.is_started and agent.conversation and agent.conversation.connection:
+                    conn = agent.conversation.connection
+                    if hasattr(conn, "_ws") and conn._ws and conn._ws.open:
+                        is_active = True
+            except Exception as e:
+                logger.warning(f"Error checking connection status for chat_id {chat_id}: {e}")
+            
+            if not is_active:
+                logger.info(f"Antigravity session for chat_id {chat_id} is disconnected. Restarting session...")
+                await self.close_session(chat_id, clear_persistence=False)
+
         if chat_id not in self.active_agents:
             logger.info(f"Creating/resuming Antigravity session for chat_id: {chat_id}")
             
@@ -78,19 +94,24 @@ class SessionManager:
                 self.saved_sessions[chat_key] = conv_id
                 self._save_sessions()
 
-    async def close_session(self, chat_id: int) -> bool:
-        """Closes and removes a specific agent session by chat_id, clearing its persistence."""
+    async def close_session(self, chat_id: int, clear_persistence: bool = True) -> bool:
+        """Closes and removes a specific agent session by chat_id, optionally clearing persistence."""
         agent = self.active_agents.pop(chat_id, None)
         chat_key = str(chat_id)
         
-        # Remove from saved sessions as well to allow a fresh start
-        removed_saved = self.saved_sessions.pop(chat_key, None) is not None
-        if removed_saved:
-            self._save_sessions()
+        if clear_persistence:
+            removed_saved = self.saved_sessions.pop(chat_key, None) is not None
+            if removed_saved:
+                self._save_sessions()
+        else:
+            removed_saved = False
             
         if agent:
             logger.info(f"Closing active Antigravity session for chat_id: {chat_id}")
-            await agent.__aexit__(None, None, None)
+            try:
+                await agent.__aexit__(None, None, None)
+            except Exception as e:
+                logger.error(f"Error during agent session cleanup for chat_id {chat_id}: {e}")
             return True
             
         return removed_saved
