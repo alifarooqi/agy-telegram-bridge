@@ -31,7 +31,8 @@ SYSTEM_INSTRUCTIONS = os.getenv(
 
 def _is_git_command(args: dict) -> bool:
     """Predicate to check if a run_command tool call is a git command."""
-    cmd_line = args.get("CommandLine", "").strip()
+    # Retrieve the command line using either case variation for robustness
+    cmd_line = (args.get("command_line") or args.get("CommandLine") or "").strip()
     # Accept if the command is exactly 'git' or starts with 'git '
     return cmd_line == "git" or cmd_line.startswith("git ")
 
