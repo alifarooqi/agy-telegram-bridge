@@ -20,18 +20,30 @@ class SessionManager:
         self.session_file = session_file
         # Maps chat_id (int) -> Agent instance
         self.active_agents: dict[int, Agent] = {}
-        # Maps chat_id (str) -> conversation_id (str)
-        self.saved_sessions: dict[str, str] = self._load_saved_sessions()
+        # Maps chat_id (str) -> dict containing 'conversation_id' and 'project_dir'
+        self.saved_sessions: dict[str, dict] = self._load_saved_sessions()
 
-    def _load_saved_sessions(self) -> dict[str, str]:
-        """Loads saved session mappings from disk."""
+    def _load_saved_sessions(self) -> dict[str, dict]:
+        """Loads saved session mappings from disk, supporting migration from flat formats."""
         if os.path.exists(self.session_file):
             try:
                 with open(self.session_file, "r") as f:
                     data = json.load(f)
                     if isinstance(data, dict):
-                        logger.info(f"Loaded {len(data)} saved session mappings from {self.session_file}")
-                        return data
+                        migrated = {}
+                        for k, v in data.items():
+                            if isinstance(v, str):
+                                # Migrate legacy flat conversation_id string to dictionary schema
+                                migrated[k] = {"conversation_id": v, "project_dir": None}
+                            elif isinstance(v, dict):
+                                migrated[k] = {
+                                    "conversation_id": v.get("conversation_id"),
+                                    "project_dir": v.get("project_dir")
+                                }
+                            else:
+                                migrated[k] = {"conversation_id": None, "project_dir": None}
+                        logger.info(f"Loaded {len(migrated)} saved session mappings from {self.session_file}")
+                        return migrated
             except Exception as e:
                 logger.error(f"Error loading saved sessions: {e}")
         return {}
@@ -47,7 +59,7 @@ class SessionManager:
 
     async def get_conversation(self, chat_id: int) -> Conversation:
         """Retrieves or creates a stateful conversation for the given chat_id,
-        resuming from a saved conversation ID if available.
+        resuming from a saved conversation ID and workspace directory if available.
         """
         # Check if we have an active agent and if it's still connected
         if chat_id in self.active_agents:
@@ -68,11 +80,14 @@ class SessionManager:
         if chat_id not in self.active_agents:
             logger.info(f"Creating/resuming Antigravity session for chat_id: {chat_id}")
             
-            # Check for saved conversation_id
-            saved_conv_id = self.saved_sessions.get(str(chat_id))
+            # Check for saved conversation_id and project_dir
+            chat_key = str(chat_id)
+            session_data = self.saved_sessions.get(chat_key, {})
+            saved_conv_id = session_data.get("conversation_id")
+            project_dir = session_data.get("project_dir")
             
-            # Get base configuration and inject saved conversation_id if present
-            config = get_agent_config()
+            # Get base configuration and inject saved settings
+            config = get_agent_config(project_dir=project_dir)
             if saved_conv_id:
                 logger.info(f"Resuming conversation with ID: {saved_conv_id}")
                 config = config.model_copy(update={"conversation_id": saved_conv_id})
@@ -89,10 +104,23 @@ class SessionManager:
         if agent and agent.conversation_id:
             conv_id = agent.conversation_id
             chat_key = str(chat_id)
-            if self.saved_sessions.get(chat_key) != conv_id:
+            session_data = self.saved_sessions.setdefault(chat_key, {"conversation_id": None, "project_dir": None})
+            if session_data.get("conversation_id") != conv_id:
                 logger.info(f"Recording new conversation ID '{conv_id}' for chat_id: {chat_id}")
-                self.saved_sessions[chat_key] = conv_id
+                session_data["conversation_id"] = conv_id
                 self._save_sessions()
+
+    async def set_project_dir(self, chat_id: int, project_dir: str | None) -> None:
+        """Sets the working project directory for the session and resets the active session to apply it."""
+        chat_key = str(chat_id)
+        session_data = self.saved_sessions.setdefault(chat_key, {"conversation_id": None, "project_dir": None})
+        session_data["project_dir"] = project_dir
+        self._save_sessions()
+        
+        # Close active agent connection so the next turn starts in the updated workspace
+        if chat_id in self.active_agents:
+            logger.info(f"Resetting active session for chat_id {chat_id} to apply new workspace: {project_dir}")
+            await self.close_session(chat_id, clear_persistence=False)
 
     async def close_session(self, chat_id: int, clear_persistence: bool = True) -> bool:
         """Closes and removes a specific agent session by chat_id, optionally clearing persistence."""

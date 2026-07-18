@@ -135,6 +135,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.exception(f"Error handling message from chat_id {chat_id}: {e}")
         await update.message.reply_text(f"An error occurred: {str(e)}")
 
+async def project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Gets or sets the project directory/workspace for the Antigravity Agent."""
+    user = update.effective_user
+    if not user:
+        return
+        
+    if not is_authorized(user.id):
+        await update.message.reply_text("Unauthorized.")
+        return
+        
+    chat_id = update.effective_chat.id
+    chat_key = str(chat_id)
+    
+    # If no arguments, return current project directory
+    if not context.args:
+        session_data = session_manager.saved_sessions.get(chat_key, {})
+        current_project = session_data.get("project_dir")
+        if current_project:
+            await update.message.reply_text(f"Current project directory: `{current_project}`")
+        else:
+            import os
+            default_project = os.getcwd()
+            await update.message.reply_text(f"No specific project configured. Using default directory: `{default_project}`")
+        return
+        
+    # Otherwise, try to update it
+    new_project = " ".join(context.args).strip()
+    
+    import os
+    if not os.path.isabs(new_project):
+        await update.message.reply_text("Error: Project path must be an absolute path (e.g. `/Users/username/project`).")
+        return
+        
+    if not os.path.isdir(new_project):
+        await update.message.reply_text(f"Error: Directory `{new_project}` does not exist on your Mac.")
+        return
+        
+    try:
+        await session_manager.set_project_dir(chat_id, new_project)
+        await update.message.reply_text(f"Project directory successfully updated to: `{new_project}`\nSession has been reset to apply changes.")
+    except Exception as e:
+        logger.exception(f"Error setting project directory for chat_id {chat_id}: {e}")
+        await update.message.reply_text(f"Failed to set project directory: {str(e)}")
+
 async def post_shutdown(application: Application) -> None:
     """Hook to clean up active agent sessions on shutdown."""
     await session_manager.close_all()
@@ -156,6 +200,7 @@ def main() -> None:
     # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("reset", reset))
+    application.add_handler(CommandHandler("project", project))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Run the bot

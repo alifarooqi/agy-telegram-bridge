@@ -74,6 +74,8 @@ python3 bot.py
 ### Telegram Bot Commands
 - `/start`: Initializes the chat session and returns a greeting.
 - `/reset`: Closes the current agent session, clears the local history cache, and starts a fresh conversation.
+- `/project`: Displays the active project directory/workspace of the Antigravity Agent.
+- `/project /absolute/path`: Dynamically updates the active project directory/workspace for the session and resets the agent connection to apply the changes immediately.
 
 ---
 

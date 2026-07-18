@@ -35,7 +35,7 @@ def _is_git_command(args: dict) -> bool:
     # Accept if the command is exactly 'git' or starts with 'git '
     return cmd_line == "git" or cmd_line.startswith("git ")
 
-def get_agent_config() -> LocalAgentConfig:
+def get_agent_config(project_dir: str | None = None) -> LocalAgentConfig:
     """Creates and returns the LocalAgentConfig based on environment variables."""
     api_key = os.getenv("GEMINI_API_KEY")
     
@@ -64,9 +64,13 @@ def get_agent_config() -> LocalAgentConfig:
         policy.allow("run_command", when=_is_git_command, name="allow_git_commands")
     ]
     
+    # Set workspaces list if a specific project directory is provided
+    workspaces = [project_dir] if project_dir else None
+    
     return LocalAgentConfig(
         system_instructions=SYSTEM_INSTRUCTIONS,
         capabilities=capabilities,
         policies=policies,
-        api_key=api_key
+        api_key=api_key,
+        workspaces=workspaces
     )
