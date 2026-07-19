@@ -20,11 +20,11 @@ class SessionManager:
         self.session_file = session_file
         # Maps chat_id (int) -> Agent instance
         self.active_agents: dict[int, Agent] = {}
-        # Maps chat_id (str) -> dict containing 'conversation_id' and 'project_dir'
+        # Maps chat_id (str) -> dict containing 'active_project_dir' and 'projects': {project_dir: conversation_id}
         self.saved_sessions: dict[str, dict] = self._load_saved_sessions()
 
     def _load_saved_sessions(self) -> dict[str, dict]:
-        """Loads saved session mappings from disk, supporting migration from flat formats."""
+        """Loads saved session mappings from disk, supporting migration from flat formats and previous schemas."""
         if os.path.exists(self.session_file):
             try:
                 with open(self.session_file, "r") as f:
@@ -33,16 +33,35 @@ class SessionManager:
                         migrated = {}
                         for k, v in data.items():
                             if isinstance(v, str):
-                                # Migrate legacy flat conversation_id string to dictionary schema
-                                migrated[k] = {"conversation_id": v, "project_dir": None}
-                            elif isinstance(v, dict):
+                                # Legacy flat format: chat_id -> conversation_id string
                                 migrated[k] = {
-                                    "conversation_id": v.get("conversation_id"),
-                                    "project_dir": v.get("project_dir")
+                                    "active_project_dir": None,
+                                    "projects": {"default": v}
                                 }
+                            elif isinstance(v, dict):
+                                if "projects" in v:
+                                    # Already uses the multi-project schema
+                                    migrated[k] = {
+                                        "active_project_dir": v.get("active_project_dir"),
+                                        "projects": v.get("projects", {})
+                                    }
+                                else:
+                                    # Intermediate format: chat_id -> {"conversation_id": ..., "project_dir": ...}
+                                    project_dir = v.get("project_dir")
+                                    conv_id = v.get("conversation_id")
+                                    proj_key = project_dir if project_dir else "default"
+                                    
+                                    projects_map = {}
+                                    if conv_id:
+                                        projects_map[proj_key] = conv_id
+                                        
+                                    migrated[k] = {
+                                        "active_project_dir": project_dir,
+                                        "projects": projects_map
+                                    }
                             else:
-                                migrated[k] = {"conversation_id": None, "project_dir": None}
-                        logger.info(f"Loaded {len(migrated)} saved session mappings from {self.session_file}")
+                                migrated[k] = {"active_project_dir": None, "projects": {}}
+                        logger.info(f"Loaded and migrated {len(migrated)} session records from {self.session_file}")
                         return migrated
             except Exception as e:
                 logger.error(f"Error loading saved sessions: {e}")
@@ -59,7 +78,7 @@ class SessionManager:
 
     async def get_conversation(self, chat_id: int) -> Conversation:
         """Retrieves or creates a stateful conversation for the given chat_id,
-        resuming from a saved conversation ID and workspace directory if available.
+        resuming from the project-specific conversation ID if available.
         """
         # Check if we have an active agent and if it's still connected
         if chat_id in self.active_agents:
@@ -80,16 +99,19 @@ class SessionManager:
         if chat_id not in self.active_agents:
             logger.info(f"Creating/resuming Antigravity session for chat_id: {chat_id}")
             
-            # Check for saved conversation_id and project_dir
             chat_key = str(chat_id)
             session_data = self.saved_sessions.get(chat_key, {})
-            saved_conv_id = session_data.get("conversation_id")
-            project_dir = session_data.get("project_dir")
+            project_dir = session_data.get("active_project_dir")
+            
+            # Retrieve the conversation ID specific to this project directory
+            proj_key = project_dir if project_dir else "default"
+            projects_map = session_data.get("projects", {})
+            saved_conv_id = projects_map.get(proj_key)
             
             # Get base configuration and inject saved settings
             config = get_agent_config(project_dir=project_dir)
             if saved_conv_id:
-                logger.info(f"Resuming conversation with ID: {saved_conv_id}")
+                logger.info(f"Resuming conversation for project '{proj_key}' with ID: {saved_conv_id}")
                 config = config.model_copy(update={"conversation_id": saved_conv_id})
                 
             agent = Agent(config)
@@ -99,27 +121,39 @@ class SessionManager:
         return self.active_agents[chat_id].conversation
 
     def record_conversation_id(self, chat_id: int):
-        """Inspects the active session for a conversation_id and saves it if new."""
+        """Inspects the active session for a conversation_id and saves it under the active project."""
         agent = self.active_agents.get(chat_id)
         if agent and agent.conversation_id:
             conv_id = agent.conversation_id
             chat_key = str(chat_id)
-            session_data = self.saved_sessions.setdefault(chat_key, {"conversation_id": None, "project_dir": None})
-            if session_data.get("conversation_id") != conv_id:
-                logger.info(f"Recording new conversation ID '{conv_id}' for chat_id: {chat_id}")
-                session_data["conversation_id"] = conv_id
+            
+            session_data = self.saved_sessions.setdefault(chat_key, {
+                "active_project_dir": None,
+                "projects": {}
+            })
+            
+            project_dir = session_data.get("active_project_dir")
+            proj_key = project_dir if project_dir else "default"
+            
+            projects_map = session_data.setdefault("projects", {})
+            if projects_map.get(proj_key) != conv_id:
+                logger.info(f"Recording conversation ID '{conv_id}' for project: {proj_key}")
+                projects_map[proj_key] = conv_id
                 self._save_sessions()
 
     async def set_project_dir(self, chat_id: int, project_dir: str | None) -> None:
         """Sets the working project directory for the session and resets the active session to apply it."""
         chat_key = str(chat_id)
-        session_data = self.saved_sessions.setdefault(chat_key, {"conversation_id": None, "project_dir": None})
-        session_data["project_dir"] = project_dir
+        session_data = self.saved_sessions.setdefault(chat_key, {
+            "active_project_dir": None,
+            "projects": {}
+        })
+        session_data["active_project_dir"] = project_dir
         self._save_sessions()
         
-        # Close active agent connection so the next turn starts in the updated workspace
+        # Close active agent connection so the next turn starts in the new workspace with its project-specific history
         if chat_id in self.active_agents:
-            logger.info(f"Resetting active session for chat_id {chat_id} to apply new workspace: {project_dir}")
+            logger.info(f"Resetting active session for chat_id {chat_id} to switch to workspace: {project_dir}")
             await self.close_session(chat_id, clear_persistence=False)
 
     async def close_session(self, chat_id: int, clear_persistence: bool = True) -> bool:

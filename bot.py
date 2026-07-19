@@ -156,7 +156,7 @@ async def project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # If no arguments, return current project directory
     if not context.args:
         session_data = session_manager.saved_sessions.get(chat_key, {})
-        current_project = session_data.get("project_dir")
+        current_project = session_data.get("active_project_dir")
         if current_project:
             await update.message.reply_text(f"Current project directory: `{current_project}`")
         else:
