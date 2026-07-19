@@ -128,8 +128,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         session_manager.record_conversation_id(chat_id)
         
         # Send replies (splitting into multiple messages if needed)
-        for chunk in split_message(response_text):
+        chunks = split_message(response_text)
+        for i, chunk in enumerate(chunks):
             await update.message.reply_text(chunk)
+            # Sleep briefly between chunks to prevent flooding and respect Telegram's rate limits
+            if i < len(chunks) - 1:
+                import asyncio
+                await asyncio.sleep(1.0)
             
     except Exception as e:
         logger.exception(f"Error handling message from chat_id {chat_id}: {e}")
