@@ -1,5 +1,7 @@
 # Antigravity Telegram Bot Bridge
 
+![Showcase Banner](assets/showcase.jpg)
+
 A robust Python application that bridges a Telegram Bot with the **Google Antigravity SDK**, allowing you to chat with and run tasks on your local Antigravity Agent running on your Mac directly from your Telegram mobile app.
 
 Designed with open-source standards in mind, this project supports isolated multi-session conversations, session persistence across restarts, and strong safety controls to prevent unauthorized remote code execution.
