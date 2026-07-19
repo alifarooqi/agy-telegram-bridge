@@ -105,7 +105,7 @@ class SessionManager:
             
             # Retrieve the conversation ID specific to this project directory
             proj_key = project_dir if project_dir else "default"
-            projects_map = session_data.get("projects", {})
+            projects_map = session_data.setdefault("projects", {})
             saved_conv_id = projects_map.get(proj_key)
             
             # Get base configuration and inject saved settings
@@ -115,8 +115,28 @@ class SessionManager:
                 config = config.model_copy(update={"conversation_id": saved_conv_id})
                 
             agent = Agent(config)
-            await agent.__aenter__()
-            self.active_agents[chat_id] = agent
+            try:
+                await agent.__aenter__()
+                self.active_agents[chat_id] = agent
+            except Exception as enter_err:
+                err_msg = str(enter_err)
+                # If it failed to resume because the conversation ID was not found, retry with conversation_id=None
+                if saved_conv_id and ("not found" in err_msg or "Failed to initialize conversation" in err_msg):
+                    logger.warning(
+                        f"Failed to resume conversation '{saved_conv_id}' for project '{proj_key}' (likely expired or cleared). "
+                        "Falling back to a fresh session."
+                    )
+                    # Clear the invalid conversation ID
+                    projects_map.pop(proj_key, None)
+                    self._save_sessions()
+                    
+                    # Re-create agent configuration without conversation_id
+                    config = get_agent_config(project_dir=project_dir)
+                    agent = Agent(config)
+                    await agent.__aenter__()
+                    self.active_agents[chat_id] = agent
+                else:
+                    raise
             
         return self.active_agents[chat_id].conversation
 

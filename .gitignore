@@ -6,6 +6,7 @@ ENV/
 # Local configuration and secrets
 .env
 sessions.json
+.sessions_cache/
 
 # Python bytecode and caches
 __pycache__/

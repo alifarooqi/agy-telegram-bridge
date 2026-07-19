@@ -68,10 +68,15 @@ def get_agent_config(project_dir: str | None = None) -> LocalAgentConfig:
     # Set workspaces list if a specific project directory is provided
     workspaces = [project_dir] if project_dir else None
     
+    # Establish a persistent folder inside the workspace for conversation histories
+    save_dir = os.path.abspath(".sessions_cache")
+    os.makedirs(save_dir, exist_ok=True)
+    
     return LocalAgentConfig(
         system_instructions=SYSTEM_INSTRUCTIONS,
         capabilities=capabilities,
         policies=policies,
         api_key=api_key,
-        workspaces=workspaces
+        workspaces=workspaces,
+        save_dir=save_dir
     )
